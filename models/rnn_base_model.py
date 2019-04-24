@@ -8,11 +8,12 @@ import tensorflow as tf
 
 class RNNBaseModel(object):
 
-    """Interface containing some boilerplate code for training tensorflow models.
-    Subclassing models must implement self.calculate_loss(), which returns a tensor for the batch loss.
-    Code for the training loop, parameter updates, checkpointing, and inference are implemented here and
-    subclasses are mainly responsible for building the computational graph beginning with the placeholders
-    and ending with the loss tensor.
+    """Interface containing boilerplate code for training tensorflow RNN  
+    models. Subclassing models must implement self.calculate_loss(), which 
+    returns a tensor for the batch loss. Code for the training loop, 
+    parameter updates, checkpointing, and inference are implemented here and
+    subclasses are mainly responsible for building the computational graph 
+    beginning with the placeholders and ending with the loss tensor.
     Args:
         reader: Class with attributes train_batch_generator, val_batch_generator, and test_batch_generator
             that yield dictionaries mapping tf.placeholder names (as strings) to batch data (numpy arrays).
@@ -48,10 +49,27 @@ class RNNBaseModel(object):
         self.stp_counter = 0
         self.stp_after = stp_after   
 
+    
     def calculate_loss(self):
+    """ The calculation of the loss function has to be implemented by all 
+    subclasses. 
+
+    Raises: 
+        NotImplementedError: If method is not implemented by subclass. 
+    """
         raise NotImplementedError('subclass must implement this')
 
+
     def get_optimizer(self, learning_rate):
+    """ The method  returns the specified optimization algorithm.  
+
+    Args: 
+        learning_rate (float): The learning rate of an optimizer specifies
+            the magnitude of the movement towards an (local) minimum of the
+            loss function
+
+    Returns: Tensorflow optimizer  
+    """
         if self.optimizer == 'adam':
             return tf.train.AdamOptimizer(learning_rate, name ='optimizer')
         elif self.optimizer == 'gd':
@@ -61,23 +79,42 @@ class RNNBaseModel(object):
         else:
             assert False, 'optimizer must be adam, gd, or rms'
 
+    
+    def early_stopping(self, val_metric, minimize=True):  
+    """ Early stopping aborts the network training process when no 
+        validation loss/accuracy improvements were observed for 
+        a speciefied amount of epochs defined in the variable stp_after. 
 
-    def early_stopping(self, validation_metric):  
-       
+        Args: 
+            val_metric (float): The metric which is validated after
+                each epoch.   
+            minimize (boolean, optional): Specifies if the validation 
+                metric should ideally be minimized or maximized. Defaults 
+                to True.
+
+        Returns: 
+            bool: True, if training process should be continued, False 
+                otherwise. 
+    """
+        # behaviour in first epoch 
         if self.best_validation_metric is None: 
-           self.best_validation_metric = validation_metric
-       
+           self.best_validation_metric = val_metric
+
+        # in following epochs  
         else: 
-            if validation_metric < self.best_validation_metric: 
-                self.best_validation_metric = validation_metric
+            if val_metric < self.best_validation_metric: 
+                self.best_validation_metric = val_metric
                 self.stp_counter = 0 
             else: 
                 self.stp_counter += 1 
        
+        # check if limit of epochs without any improvement has been 
+        # reached 
         if self.stp_counter >= self.stp_after: 
             return False 
         else: 
             return True 
+
 
     def feed_batch(self, data_generator, mode, session, optimizer, loss, tf_x_placeholder, tf_y_placeholder, prob, dropout): 
 	
