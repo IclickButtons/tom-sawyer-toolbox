@@ -42,8 +42,21 @@ class RNNBaseModel(object):
         prediction_dir: Directory where predictions/outputs are saved.
     """
 
-    def __init__(self, optimizer='adam', mode='test', stp_after=100):
+    def __init__(self,
+                 data_gen, 
+                 batch_sizes=[128], 
+                 num_epochs= 1000, 
+                 learning_rates=[0.1], 
+                 optimizer='adam', 
+                 mode='test', 
+                 stp_after=100, 
+                 ):
+
+
+
         self.optimizer = optimizer
+
+
         self.mode = mode
         self.best_validation_metric = None 
         self.stp_counter = 0
@@ -61,7 +74,9 @@ class RNNBaseModel(object):
 
 
     def get_optimizer(self, learning_rate):
-        """ Get method which returns the specified optimization algorithm.  
+        """ Get method which returns the specified optimization algorithm. At
+        this moment, Adam, RMSprop, and (classical) gradient descant can be
+        chosen   
 
         Args: 
             learning_rate (float): The learning rate of an optimizer 
@@ -79,11 +94,24 @@ class RNNBaseModel(object):
         else:
             assert False, 'optimizer must be adam, gd, or rms'
 
-    def report_metrics(self, train_loss_hist, val_loss_hist, ep): 
 
+    def report_metrics(self, train_loss_hist, val_loss_hist, ep): 
+        """ Reports the average batch metrics which are printed after each
+        epoch or a specified number of epochs. 
+
+        Args: 
+            train_loss_hist (list of floats): contains the aggregated loss of
+                each batch in the epoch for the training data.  
+            val_loss_hist (list of floats): contains the aggregated loss of
+                each batch in the epoch for the validation data. 
+        """
+        # compute average losses for training and validation data 
         avg_batch_train_loss= sum(train_loss_hist) / len(train_loss_hist) 
         avg_batch_val_loss = sum(val_loss_hist) / len/val_loss_hist) 
-        print('Epoch:')  
+        
+        # print metrics 
+        print('Epoch: {}, Training Loss: {}, Validation Loss: {}'.format(ep, 
+            avg_batch_train_loss, avg_batch_val_loss)  
 
     
     def early_stopping(self, val_metric, minimize=True):  
@@ -121,43 +149,41 @@ class RNNBaseModel(object):
         else: 
             return True 
 
+    def train(self): 
+        for ep in range(self._epochs): 
+            train_start = time.time() 
+            x, y = data_gen.next_batch() 
+            
 
-    def feed_batch(self, data_generator, mode, session, optimizer, loss, tf_x_placeholder, tf_y_placeholder, prob, dropout): 
-	
+    def feed_batch(self, data_generator, mode, session, optimizer, loss, tf_x_placeholder, tf_y_placeholder): 
+        """ Feeds batches to the network for training and evaluation of 
+        validation data. 
+
+        Returns: 
+            list: 
+        """
+        # list to which the individual batch losses are appeneded 
         loss_hist = []
 
         while(data_generator.is_full()): 
-            u_data, u_labels = data_generator.unroll_batches()
+            x, y = data_generator.unroll_batches()
             feed_dict = {}
-            feed_dict[tf_x_placeholder] = u_data
-            feed_dict[tf_y_placeholder] = u_labels
-            
+            feed_dict[tf_x_placeholder] = x 
+            feed_dict[tf_y_placeholder] = y 
+           
+            # in training mode the model is optmized through the specified 
+            # optimization algorithm and the the training loss is returned
             if mode == 'train':
-                feed_dict[prob] = dropout   
                 _, l = session.run([optimizer, loss], feed_dict=feed_dict)
                 loss_hist.append(l)
-
+            
+            # in validation mode no training (optimization) ins conducted, 
+            # only predictions for the validation data 
             if mode == 'val': 
                 l = session.run([loss], feed_dict=feed_dict)
                 loss_hist.append(l[0])
         
         return loss_hist
-
-    def feed_batch_pred(self, data_generator, mode, session, tf_x_placeholder, tf_y_placeholder, y_pred): 
-	
-        pred = []
-
-        while(data_generator.is_full()): 
-            u_data, u_labels = data_generator.unroll_batches()
-            feed_dict = {}
-            feed_dict[tf_x_placeholder] = u_data
-            feed_dict[tf_y_placeholder] = u_labels
-
-            if mode == 'predict': 
-                l = session.run(y_pred, feed_dict=feed_dict)
-                pred.append(l)
-
-        return pred
 
 
     def save_model(self, saver, validation_metric, session, name):

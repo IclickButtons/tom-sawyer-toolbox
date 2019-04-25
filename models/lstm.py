@@ -1,31 +1,30 @@
 import tensorflow as tf 
 
-
 class LSTM(base_rnn_model): 
     def __init__(self, train_data, val_data, batch_size, lr, look_back,
             dropout, units, epochs, **kwargs): 
         self._train_data = train_data 
         self._val_data = val_data 
 
+    def network(self)
+    # TODO implement network
+    layer1 = 
+    layer2 = 
+    layer3 = 
+
     def calculate_loss(self, y_pred, y_true): 
+        self.x_train = tf.placeholder(tf.float32, shape=[None, None, self._D] 
+        self.y_train = tf.placeholder(tf.float32, shape=[None, None, 1]
         return tf.reduce_mean(tf.square(y_pred - y), name='loss')  
 
-    def network(self): 
 
     def train(self): 
 
         # reset tf graph 
         tf.reset_default_graph() 
 
-        x_train = tf.placeholder(tf.float32, shape=[self._batch_size,
-            self._num_time_steps, self._dim], name='x_train') 
 
-        y_train = tf.placheholder(tf.float32, shape=[self._batch_size,
-            self._num_time_steps, self._dim], name='y_train') 
 
-        # TODO implement network
-
-        # define loss function 
         # TODO add logger 
         loss = self.calculate_loss(y_pred, y_true) 
 
@@ -51,4 +50,6 @@ class LSTM(base_rnn_model):
                     val_loss_hist = # feed step 
 
             
-
+if __name__ == '__main__': 
+    data_gen = TimeSeriesDataGenerator() 
+    lstm = LSTM() 
