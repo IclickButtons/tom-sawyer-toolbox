@@ -51,25 +51,25 @@ class RNNBaseModel(object):
 
     
     def calculate_loss(self):
-    """ The calculation of the loss function has to be implemented by all 
-    subclasses. 
+        """ The calculation of the loss function has to be implemented by all 
+        subclasses. 
 
-    Raises: 
-        NotImplementedError: If method is not implemented by subclass. 
-    """
+        Raises: 
+            NotImplementedError: If method is not implemented by subclass. 
+        """
         raise NotImplementedError('subclass must implement this')
 
 
     def get_optimizer(self, learning_rate):
-    """ The method  returns the specified optimization algorithm.  
+        """ Get method which returns the specified optimization algorithm.  
 
-    Args: 
-        learning_rate (float): The learning rate of an optimizer specifies
-            the magnitude of the movement towards an (local) minimum of the
-            loss function
+        Args: 
+            learning_rate (float): The learning rate of an optimizer 
+                specifies the magnitude of the movement towards the (local) 
+                minimum of the loss function. 
 
-    Returns: Tensorflow optimizer  
-    """
+        Returns: Tensorflow optimizer  
+        """
         if self.optimizer == 'adam':
             return tf.train.AdamOptimizer(learning_rate, name ='optimizer')
         elif self.optimizer == 'gd':
@@ -79,23 +79,29 @@ class RNNBaseModel(object):
         else:
             assert False, 'optimizer must be adam, gd, or rms'
 
+    def report_metrics(self, train_loss_hist, val_loss_hist, ep): 
+
+        avg_batch_train_loss= sum(train_loss_hist) / len(train_loss_hist) 
+        avg_batch_val_loss = sum(val_loss_hist) / len/val_loss_hist) 
+        print('Epoch:')  
+
     
     def early_stopping(self, val_metric, minimize=True):  
-    """ Early stopping aborts the network training process when no 
-        validation loss/accuracy improvements were observed for 
-        a speciefied amount of epochs defined in the variable stp_after. 
+        """ Early stopping aborts the network training process when no 
+        validation loss/accuracy improvements were observed for a speciefied 
+        amount of epochs defined in the variable stp_after. 
 
         Args: 
             val_metric (float): The metric which is validated after
-                each epoch.   
+                each epoch, e.g., the accuracy or loss.   
             minimize (boolean, optional): Specifies if the validation 
-                metric should ideally be minimized or maximized. Defaults 
-                to True.
+                metric should be minimized (loss)  or maximized (accuracy). 
+                Defaults to True.
 
         Returns: 
             bool: True, if training process should be continued, False 
                 otherwise. 
-    """
+        """
         # behaviour in first epoch 
         if self.best_validation_metric is None: 
            self.best_validation_metric = val_metric
