@@ -44,13 +44,14 @@ class RNNBaseModel(object):
 
     def __init__(self,
                  data_gen, 
-                 batch_sizes=[128], 
+                 batch_size=128, 
                  num_epochs= 1000, 
-                 learning_rates=[0.1], 
+                 learning_rate=0.1, 
                  optimizer='adam', 
                  stp_after=100, 
                  grad_clip=5):
 
+        self._batch_size = batch_size
 
         self.optimizer = optimizer
 
@@ -61,7 +62,6 @@ class RNNBaseModel(object):
 
         self._graph = self.build_graph() 
         self._session = tf.session(graph=self.graph) 
-
     
     def calculate_loss(self):
         """ The calculation of the loss function has to be implemented by all 
@@ -112,11 +112,11 @@ class RNNBaseModel(object):
         """
         # compute average losses for training and validation data 
         avg_batch_train_loss= sum(train_loss_hist) / len(train_loss_hist) 
-        avg_batch_val_loss = sum(val_loss_hist) / len/val_loss_hist) 
+        avg_batch_val_loss = sum(val_loss_hist) / len(val_loss_hist) 
         
         # print metrics 
         print('Epoch: {}, Training Loss: {}, Validation Loss: {}'.format(ep, 
-            avg_batch_train_loss, avg_batch_val_loss)  
+            avg_batch_train_loss, avg_batch_val_loss))  
 
     
     def early_stopping(self, val_metric, minimize=True):  
@@ -171,7 +171,7 @@ class RNNBaseModel(object):
 
                     train_feed_dict = {getattr(self, placeholder_name, None) : data
                         for placeholder_name, data in train_batch.items() if
-                        hasattr(self, placeholder_name}
+                        hasattr(self, placeholder_name)}
 
                     loss, _ = self.session.run(fetches=[self.loss, self.step],
                         feed_dict = train_feed_dict) 
