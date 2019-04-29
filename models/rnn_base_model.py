@@ -15,8 +15,8 @@ class RNNBaseModel(object):
     subclasses are mainly responsible for building the computational graph 
     beginning with the placeholders and ending with the loss tensor.
     Args:
-        reader: Class with attributes train_batch_generator, val_batch_generator, and test_batch_generator
-            that yield dictionaries mapping tf.placeholder names (as strings) to batch data (numpy arrays).
+        data_gen: Data generator class that yields batch dictionaries mapping 
+            tf.placeholder names (as strings) to batch data (numpy arrays).
         batch_size: Minibatch size.
         learning_rate: Learning rate.
         optimizer: 'rms' for RMSProp, 'adam' for Adam, 'sgd' for SGD
@@ -48,24 +48,25 @@ class RNNBaseModel(object):
                  num_epochs= 1000, 
                  learning_rates=[0.1], 
                  optimizer='adam', 
-                 mode='test', 
                  stp_after=100, 
-                 ):
-
+                 grad_clip=5):
 
 
         self.optimizer = optimizer
 
-
-        self.mode = mode
         self.best_validation_metric = None 
         self.stp_counter = 0
         self.stp_after = stp_after   
+        self._grad_clip = grad_clip 
+
+        self._graph = self.build_graph() 
+        self._session = tf.session(graph=self.graph) 
 
     
     def calculate_loss(self):
         """ The calculation of the loss function has to be implemented by all 
-        subclasses. 
+        subclasses. Necessarily, this also includes the specification of the
+        specfic model typoology. 
 
         Raises: 
             NotImplementedError: If method is not implemented by subclass. 
@@ -74,9 +75,8 @@ class RNNBaseModel(object):
 
 
     def get_optimizer(self, learning_rate):
-        """ Get method which returns the specified optimization algorithm. At
-        this moment, Adam, RMSprop, and (classical) gradient descant can be
-        chosen   
+        """ Returns the specified optimization algorithm. At this moment, 
+        Adam, RMSprop, and (classical) gradient descant can be chosen.    
 
         Args: 
             learning_rate (float): The learning rate of an optimizer 
@@ -86,11 +86,16 @@ class RNNBaseModel(object):
         Returns: Tensorflow optimizer  
         """
         if self.optimizer == 'adam':
-            return tf.train.AdamOptimizer(learning_rate, name ='optimizer')
+            return tf.train.AdamOptimizer(learning_rate, 
+                                          name='optimizer')
         elif self.optimizer == 'gd':
-            return tf.train.GradientDescentOptimizer(learning_rate, name ='optimizer')
+            return tf.train.GradientDescentOptimizer(learning_rate, 
+                                                     name='optimizer')
         elif self.optimizer == 'rms':
-            return tf.train.RMSPropOptimizer(learning_rate, decay=0.95, momentum=0.9, name ='optimizer')
+            return tf.train.RMSPropOptimizer(learning_rate, 
+                                             decay=0.95, 
+                                             momentum=0.9, 
+                                             name='optimizer')
         else:
             assert False, 'optimizer must be adam, gd, or rms'
 
@@ -150,41 +155,31 @@ class RNNBaseModel(object):
             return True 
 
     def train(self): 
-        for ep in range(self._epochs): 
-            train_start = time.time() 
-            x, y = data_gen.next_batch() 
+        with self.session.as_default(): 
             
+            self.session.run(self.init) 
+            ep = 0 
+             
+            while ep < self._num_epochs: 
+                
+                # trainining  
+                #train_start = time.time()
+                ep_loss_hist = []  
+                
+                while data_generator.is_full(): 
+                    train_batch = data_gen.next_batch() 
 
-    def feed_batch(self, data_generator, mode, session, optimizer, loss, tf_x_placeholder, tf_y_placeholder): 
-        """ Feeds batches to the network for training and evaluation of 
-        validation data. 
+                    train_feed_dict = {getattr(self, placeholder_name, None) : data
+                        for placeholder_name, data in train_batch.items() if
+                        hasattr(self, placeholder_name}
 
-        Returns: 
-            list: 
-        """
-        # list to which the individual batch losses are appeneded 
-        loss_hist = []
-
-        while(data_generator.is_full()): 
-            x, y = data_generator.unroll_batches()
-            feed_dict = {}
-            feed_dict[tf_x_placeholder] = x 
-            feed_dict[tf_y_placeholder] = y 
-           
-            # in training mode the model is optmized through the specified 
-            # optimization algorithm and the the training loss is returned
-            if mode == 'train':
-                _, l = session.run([optimizer, loss], feed_dict=feed_dict)
-                loss_hist.append(l)
-            
-            # in validation mode no training (optimization) ins conducted, 
-            # only predictions for the validation data 
-            if mode == 'val': 
-                l = session.run([loss], feed_dict=feed_dict)
-                loss_hist.append(l[0])
-        
-        return loss_hist
-
+                    loss, _ = self.session.run(fetches=[self.loss, self.step],
+                        feed_dict = train_feed_dict) 
+                    
+                    ep_loss_hist.append(loss) 
+                    # TODO implement validation step 
+                    
+                    # TODO implement metric reports 
 
     def save_model(self, saver, validation_metric, session, name):
         if self.best_validation_metric == None: 
@@ -195,3 +190,24 @@ class RNNBaseModel(object):
                 save_path = saver.save(session, "./saved_models_" + name + "/model.ckpt")
                 print("Model saved")
 
+    def build_graph(self): 
+        with tf.Graph().as_default() as graph: 
+            self.loss = self.calculate_loss() 
+            self.update_parameters(self.loss) 
+            self.init = tf.global_variable_initializer()
+            self.global_step = tf.Variable(0, trainable=False) 
+
+            return graph
+
+
+    def update_parameters(self, loss): 
+        optimizer = self.get_optimizer(0.001) 
+        grads = optimizer.compute_gradients(loss) 
+        clipped = [(tf.clip_by_value(g, -self.grad_clip, self.grad_clip), v_)
+            for g, v_ in grads] 
+        update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS) 
+        with tf.control_dependencies(update_ops): 
+            step = optimizer.apply_gradients(clipped,
+                global_step=self.global_step) 
+
+        self.step = step 
