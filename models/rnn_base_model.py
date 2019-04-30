@@ -1,5 +1,6 @@
 from collections import deque
 from datetime import datetime
+import time 
 import logging
 import os
 import pprint as pp
@@ -52,6 +53,9 @@ class RNNBaseModel(object):
                  grad_clip=5):
 
         self._batch_size = batch_size
+        self._num_epochs = num_epochs
+
+        self._data_gen = data_gen
 
         self.optimizer = optimizer
 
@@ -61,7 +65,7 @@ class RNNBaseModel(object):
         self._grad_clip = grad_clip 
 
         self._graph = self.build_graph() 
-        self._session = tf.session(graph=self.graph) 
+        self._session = tf.Session(graph=self._graph) 
     
     def calculate_loss(self):
         """ The calculation of the loss function has to be implemented by all 
@@ -100,7 +104,7 @@ class RNNBaseModel(object):
             assert False, 'optimizer must be adam, gd, or rms'
 
 
-    def report_metrics(self, train_loss_hist, val_loss_hist, ep): 
+    def report_metrics(self, train_loss_hist, ep, train_time): # val_loss_hist, ep): 
         """ Reports the average batch metrics which are printed after each
         epoch or a specified number of epochs. 
 
@@ -112,11 +116,11 @@ class RNNBaseModel(object):
         """
         # compute average losses for training and validation data 
         avg_batch_train_loss= sum(train_loss_hist) / len(train_loss_hist) 
-        avg_batch_val_loss = sum(val_loss_hist) / len(val_loss_hist) 
+        #avg_batch_val_loss = sum(val_loss_hist) / len(val_loss_hist) 
         
         # print metrics 
-        print('Epoch: {}, Training Loss: {}, Validation Loss: {}'.format(ep, 
-            avg_batch_train_loss, avg_batch_val_loss))  
+        print('Epoch: {}, Training Loss: {}, Validation Loss: {}, Time: {} s'.format(ep, 
+            avg_batch_train_loss, 1, round(train_time, 3))) # avg_batch_val_loss))  
 
     
     def early_stopping(self, val_metric, minimize=True):  
@@ -155,28 +159,38 @@ class RNNBaseModel(object):
             return True 
 
     def train(self): 
-        with self.session.as_default(): 
+        with self._session.as_default(): 
             
-            self.session.run(self.init) 
+            self._session.run(self.init) 
             ep = 0 
              
             while ep < self._num_epochs: 
                 
-                # trainining  
-                #train_start = time.time()
+                # trainining step  
+                train_start = time.time()
                 ep_loss_hist = []  
                 
-                while data_generator.is_full(): 
-                    train_batch = data_gen.next_batch() 
+                while self._data_gen.yield_batches(): 
+                    train_batch = self._data_gen.create_batches() 
 
                     train_feed_dict = {getattr(self, placeholder_name, None) : data
                         for placeholder_name, data in train_batch.items() if
                         hasattr(self, placeholder_name)}
 
-                    loss, _ = self.session.run(fetches=[self.loss, self.step],
+                    loss, _ = self._session.run(fetches=[self.loss, self.step],
                         feed_dict = train_feed_dict) 
                     
                     ep_loss_hist.append(loss) 
+                
+                train_end = time.time() 
+                train_time = train_end - train_start 
+                self.report_metrics(ep_loss_hist, ep, train_time)
+
+                ep += 1
+
+                # Reset the data generator for the next epoch. 
+                self._data_gen.reset_gen()
+
                     # TODO implement validation step 
                     
                     # TODO implement metric reports 
@@ -192,10 +206,10 @@ class RNNBaseModel(object):
 
     def build_graph(self): 
         with tf.Graph().as_default() as graph: 
+            self.global_step = tf.Variable(0, trainable=False) 
             self.loss = self.calculate_loss() 
             self.update_parameters(self.loss) 
-            self.init = tf.global_variable_initializer()
-            self.global_step = tf.Variable(0, trainable=False) 
+            self.init = tf.global_variables_initializer()
 
             return graph
 
@@ -203,7 +217,7 @@ class RNNBaseModel(object):
     def update_parameters(self, loss): 
         optimizer = self.get_optimizer(0.001) 
         grads = optimizer.compute_gradients(loss) 
-        clipped = [(tf.clip_by_value(g, -self.grad_clip, self.grad_clip), v_)
+        clipped = [(tf.clip_by_value(g, -self._grad_clip, self._grad_clip), v_)
             for g, v_ in grads] 
         update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS) 
         with tf.control_dependencies(update_ops): 

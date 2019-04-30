@@ -20,7 +20,8 @@ class LSTM(RNNBaseModel):
         self.y_train = tf.placeholder(tf.float32, shape=[64, 1])  
         layer1 = tf.keras.layers.LSTM(self._num_units, 
                                      time_major=False,
-                                     stateful=True, 
+                                     stateful=True,
+                                     return_sequences = True, 
                                      batch_input_shape=(self._batch_size,
                                                         self._num_time_steps, 
                                                         1)) 
@@ -31,7 +32,7 @@ class LSTM(RNNBaseModel):
         layer1_out = layer1(self.x_train) 
         layer2_out = layer2(layer1_out) 
         y_pred = tf.layers.dense(layer2_out, 1, activation=None,
-                                 kernel_initializer=tf.orthogonal_initalizer()) 
+                                 kernel_initializer=tf.orthogonal_initializer()) 
 
         return y_pred
 

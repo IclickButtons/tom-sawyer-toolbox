@@ -8,12 +8,14 @@ from tom_sawyer_toolbox.models.lstm import LSTM
 
 if __name__ == '__main__': 
     #dir_path = os.path.dirname(os.path.realpath(__file__))
-    test_data_fp = '/home/andreas_teller/Projects/tom_sawyer_toolbox/test_data/processed/sinusoid.csv' 
+    test_data_train_fp = '/home/andreas_teller/Projects/tom_sawyer_toolbox/test_data/processed/sinusoid.csv' 
+    test_data_val_fp = '' 
 
     
-    data_gen = DataGeneratorTimeSeries(10, 1, 64, test_data_fp) 
+    data_gen = DataGeneratorTimeSeries(10, 1, 64, test_data_train_fp) 
     model = LSTM(data_gen=data_gen,  
                  num_time_steps=10, 
+                 num_pred=1, 
                  learning_rate=0.01,  
                  batch_size=64,  
                  optimizer='adam', 
