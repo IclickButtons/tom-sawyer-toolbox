@@ -13,7 +13,7 @@ if __name__ == '__main__':
     
     data_gen = DataGeneratorTimeSeries(10, 1, 64, test_data_fp) 
     model = LSTM(data_gen=data_gen,  
-                 look_back=10, 
+                 num_time_steps=10, 
                  learning_rate=0.01,  
                  batch_size=64,  
                  optimizer='adam', 

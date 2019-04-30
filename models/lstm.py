@@ -3,11 +3,11 @@ from tom_sawyer_toolbox.models.rnn_base_model import RNNBaseModel
 
 class LSTM(RNNBaseModel): 
     def __init__(self, 
-                 look_back,
+                 num_time_steps,
                  num_units, 
                  **kwargs):
 
-        self._num_time_steps = look_back 
+        self._num_time_steps = num_time_steps
         self._num_units = num_units
         self._D = 1 
         
