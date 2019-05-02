@@ -1,8 +1,14 @@
+# workaround to load data generator module 
+import sys 
+sys.path.insert(0, '/home/andreas_teller/Projects/time_series_data_generator/lib')
+
+from data_generator import DataGeneratorTimeSeries  
 from collections import deque
 from datetime import datetime
 import time 
 import logging
 import os
+import csv
 import pprint as pp
 import numpy as np
 import tensorflow as tf
@@ -44,29 +50,44 @@ class RNNBaseModel(object):
     """
 
     def __init__(self,
-                 data_gen, 
-                 batch_size=128, 
-                 num_epochs= 1000, 
-                 learning_rate=0.1, 
-                 optimizer='adam', 
+                 train_data_fp, 
+                 val_data_fp,
+                 num_pred=1, 
+                 batch_sizes=[128], 
+                 seq_lengths = [10],
+                 num_epochs=9999, 
+                 learning_rates=[0.1], 
+                 optimizers=['adam'], 
                  stp_after=100, 
-                 grad_clip=5):
+                 grad_clips=[5],  
+                 model_name='RNN_Model'):
+        
+        # Placeholders for initial graph building. 
+        self.batch_size = batch_sizes[0] 
+        self.seq_length = seq_lengths[0]   
+        self.learning_rate = learning_rates[0] 
+        self.grad_clip = grad_clips[0] 
+        self.optimizer = optimizers[0] 
 
-        self._batch_size = batch_size
+        self._train_data_fp = train_data_fp 
+        self._val_data_fp = val_data_fp 
+        self._seq_lengths = seq_lengths
+        self._num_pred = num_pred
+        self._batch_sizes = batch_sizes
         self._num_epochs = num_epochs
-
-        self._data_gen = data_gen
-
-        self.optimizer = optimizer
-
-        self.best_validation_metric = None 
+        self._path = os.path.dirname(__file__) 
+        self._save_metrics_fp = os.path.join(self._path, '../performance_reports/hpar_search_results.csv') 
+        self._optimizers = optimizers
+        self.best_val_metric = None 
         self.stp_counter = 0
         self.stp_after = stp_after   
-        self._grad_clip = grad_clip 
-
+        self._grad_clips = grad_clips 
         self._graph = self.build_graph() 
         self._session = tf.Session(graph=self._graph) 
-    
+        self._model_name = model_name 
+        self._learning_rates = learning_rates
+
+
     def calculate_loss(self):
         """ The calculation of the loss function has to be implemented by all 
         subclasses. Necessarily, this also includes the specification of the
@@ -80,50 +101,86 @@ class RNNBaseModel(object):
 
     def get_optimizer(self, learning_rate):
         """ Returns the specified optimization algorithm. At this moment, 
-        Adam, RMSprop, and (classical) gradient descant can be chosen.    
+        Adam, RMSprop, and (classical) gradient descent can be chosen.    
 
         Args: 
             learning_rate (float): The learning rate of an optimizer 
                 specifies the magnitude of the movement towards the (local) 
                 minimum of the loss function. 
 
-        Returns: Tensorflow optimizer  
+        Returns: The selected TensorFlow optimizer
         """
         if self.optimizer == 'adam':
-            return tf.train.AdamOptimizer(learning_rate, 
+            return tf.train.AdamOptimizer(learning_rate,
                                           name='optimizer')
         elif self.optimizer == 'gd':
-            return tf.train.GradientDescentOptimizer(learning_rate, 
+            return tf.train.GradientDescentOptimizer(learning_rate,
                                                      name='optimizer')
         elif self.optimizer == 'rms':
-            return tf.train.RMSPropOptimizer(learning_rate, 
-                                             decay=0.95, 
-                                             momentum=0.9, 
+            return tf.train.RMSPropOptimizer(learning_rate,
+                                             decay=0.95,
+                                             momentum=0.9,
                                              name='optimizer')
         else:
             assert False, 'optimizer must be adam, gd, or rms'
 
 
-    def report_metrics(self, train_loss_hist, ep, train_time): # val_loss_hist, ep): 
+    def calc_avg_loss(self, loss_hist):
+        """ Computes the average of the loss history for the validation or 
+        training step per epoch by dividing .
+
+        Args:
+            loss_hist (:obj:'list' of :obj:'float'): The loss history of the
+                training or validation step. Each element of the list
+                represents the loss of one batch.
+        
+        Returns:
+            float: Average batch loss of the epoch.
+        """
+        return sum(loss_hist) / len(loss_hist)
+
+    def save_metrics(self, last_epoch):
+        """ Saves the hyper parameter search validation performance metric
+        togehter with the model's name and hyperparamters in one csv file.
+        """
+        writer = csv.writer(open(self._save_metrics_fp, 'a+'))
+
+        # Check if csv file is empty. If true create header.
+        if os.stat(self._save_metrics_fp).st_size == 0 :
+            writer.writerow(['model_name', 'seq_length', 'batch_size', 
+                             'lear_rate', 'optimizer', 'grad_clip',
+                             'last_epoch', 'val_loss']) 
+            writer.writerow([self._model_name, self.seq_length,
+                             self.batch_size, self.learning_rate, 
+                             self.optimizer, self.grad_clip, last_epoch, 
+                             self.best_val_metric]) 
+        else:     
+            writer.writerow([self._model_name, self.seq_length,
+                             self.batch_size, self.learning_rate, 
+                             self.optimizer, self.grad_clip, last_epoch, 
+                             self.best_val_metric]) 
+
+
+    def report_metrics(self, train_loss_hist, val_loss_hist, ep, train_time):  
         """ Reports the average batch metrics which are printed after each
         epoch or a specified number of epochs. 
 
         Args: 
-            train_loss_hist (list of floats): contains the aggregated loss of
+            train_loss_hist (:obj:'list' of :obj:'float'): Contains the aggregated loss of
                 each batch in the epoch for the training data.  
-            val_loss_hist (list of floats): contains the aggregated loss of
+            val_loss_hist (:obj:'list' of :obj:'float'): Contains the aggregated loss of
                 each batch in the epoch for the validation data. 
         """
         # compute average losses for training and validation data 
-        avg_batch_train_loss= sum(train_loss_hist) / len(train_loss_hist) 
-        #avg_batch_val_loss = sum(val_loss_hist) / len(val_loss_hist) 
+        avg_batch_train_loss = self.calc_avg_loss(train_loss_hist) 
+        avg_batch_val_loss = self.calc_avg_loss(val_loss_hist) 
         
         # print metrics 
-        print('Epoch: {}, Training Loss: {}, Validation Loss: {}, Time: {} s'.format(ep, 
-            avg_batch_train_loss, 1, round(train_time, 3))) # avg_batch_val_loss))  
+        print('Epoch: {:4d}, Training Loss: {:12.8f}, Validation Loss: {:12.8f}, Time: {:5.3f} s'.format(ep+1, 
+            round(avg_batch_train_loss, 8), round(avg_batch_val_loss, 8), round(train_time, 3)))  
 
     
-    def early_stopping(self, val_metric, minimize=True):  
+    def early_stop(self, val_metric, minimize=True):  
         """ Early stopping aborts the network training process when no 
         validation loss/accuracy improvements were observed for a speciefied 
         amount of epochs defined in the variable stp_after. 
@@ -140,13 +197,13 @@ class RNNBaseModel(object):
                 otherwise. 
         """
         # behaviour in first epoch 
-        if self.best_validation_metric is None: 
-           self.best_validation_metric = val_metric
+        if self.best_val_metric is None: 
+           self.best_val_metric = val_metric
 
         # in following epochs  
         else: 
-            if val_metric < self.best_validation_metric: 
-                self.best_validation_metric = val_metric
+            if val_metric < self.best_val_metric: 
+                self.best_val_metric = val_metric
                 self.stp_counter = 0 
             else: 
                 self.stp_counter += 1 
@@ -158,21 +215,42 @@ class RNNBaseModel(object):
         else: 
             return True 
 
-    def train(self): 
+
+    def train(self, mode='hyp'): 
+        """
+        Args: 
+            mode (:obj:'str', optional): 
+        """
+        print('------------------------------------------------------------------------------') 
+        print('Initialized Model - Name: {}, Seq. Length: {}, Batch Size: {}, Learning Rate: {}, Optimizer: {}, Grad. Clip.: {}'.format(
+            self._model_name, self.seq_length, self.batch_size,
+            self.learning_rate, self.optimizer, self.grad_clip))   
+        
         with self._session.as_default(): 
             
             self._session.run(self.init) 
             ep = 0 
-             
+            
+            # Initialze the training and validaton data generators which 
+            # will yield sequence batches for the model trainuing 
+            # validation. 
+            train_data_gen = DataGeneratorTimeSeries(self.seq_length, 
+                                                     self._num_pred, 
+                                                     self.batch_size, 
+                                                     self._train_data_fp)  
+            val_data_gen = DataGeneratorTimeSeries(self.seq_length, 
+                                                   self._num_pred, 
+                                                   self.batch_size, 
+                                                   self._val_data_fp) 
+
             while ep < self._num_epochs: 
                 
-                # trainining step  
+                # Execution of the trainining step.
                 train_start = time.time()
-                ep_loss_hist = []  
+                train_loss_hist = []
                 
-                while self._data_gen.yield_batches(): 
-                    train_batch = self._data_gen.create_batches() 
-
+                while train_data_gen.yield_batches():
+                    train_batch = train_data_gen.create_batches()
                     train_feed_dict = {getattr(self, placeholder_name, None) : data
                         for placeholder_name, data in train_batch.items() if
                         hasattr(self, placeholder_name)}
@@ -180,22 +258,84 @@ class RNNBaseModel(object):
                     loss, _ = self._session.run(fetches=[self.loss, self.step],
                         feed_dict = train_feed_dict) 
                     
-                    ep_loss_hist.append(loss) 
+                    train_loss_hist.append(loss)
                 
-                train_end = time.time() 
-                train_time = train_end - train_start 
-                self.report_metrics(ep_loss_hist, ep, train_time)
+                # Stop the training timer and compute the time it took to train 
+                # one epoch. 
+                train_end = time.time()
+                train_time = train_end - train_start
 
+                # Execution of the validation step in which no paramaters
+                # updates are performed and only the loss for the
+                # validation data is computed.  
+                val_loss_hist = []
+                while val_data_gen.yield_batches():
+                    val_batch = val_data_gen.create_batches()
+                    val_feed_dict = {getattr(self, placeholder_name, None) : data
+                        for placeholder_name, data in val_batch.items() if
+                        hasattr(self, placeholder_name)}
+                    loss = self._session.run(fetches=[self.loss],
+                        feed_dict = val_feed_dict)
+                    val_loss_hist.append(loss[0])
+                
+                # Early stopping stops the training when a specified number
+                # of epochs without any impreovment in the validation metric
+                # have passed.
+                if not (self.early_stop(self.calc_avg_loss(val_loss_hist))):
+                    if mode == 'hyp': 
+                        self.save_metrics(ep) 
+                    return
+
+                # Reset the training  validation data generator for the next 
+                # epoch and report metrics.  
+                train_data_gen.reset_gen()
+                val_data_gen.reset_gen()
+                self.report_metrics(train_loss_hist, val_loss_hist, ep, train_time)
                 ep += 1
 
-                # Reset the data generator for the next epoch. 
-                self._data_gen.reset_gen()
+        if mode == 'hyp': 
+            self.save_metrics(ep)
 
-                    # TODO implement validation step 
-                    
-                    # TODO implement metric reports 
+        if mode == 'train': 
+            # TODO: implement train mode 
+            pass 
+
+    def hyp_search(self): 
+        # TODO: find better solution for nested for-loops 
+        for bs in self._batch_sizes: 
+            for lr in self._learning_rates: 
+                for sl in self._seq_lengths: 
+                    for gs in self._grad_clips: 
+                        for opt in self._optimizers: 
+                            self.batch_size = bs 
+                            self.learning_rate = lr 
+                            self.seq_length = sl 
+                            self.grad_clip = gs 
+                            self.optimizer = opt 
+
+                            # Updates the tensorflow computational graph with
+                            # the new hyperparameters. 
+                            self._graph = self.build_graph() 
+                            self._session = tf.Session(graph=self._graph) 
+
+                            # Run network training for the specified 
+                            # hyperparameter combinations in hyp mode
+                            # which means that models are not saved. 
+                            self.train(mode='hyp') 
+
+    def prediction(self): 
+        # TODO: implement prediction step 
+        pass
+
 
     def save_model(self, saver, validation_metric, session, name):
+        """
+        Args: 
+            saver () 
+            validation_metric (): 
+            sesseon (): 
+            name (): 
+        """
         if self.best_validation_metric == None: 
             if not os.path.isdir('saved_models_' + name):
                 os.mkdir('saved_models_' + name)             
@@ -205,6 +345,8 @@ class RNNBaseModel(object):
                 print("Model saved")
 
     def build_graph(self): 
+        """
+        """
         with tf.Graph().as_default() as graph: 
             self.global_step = tf.Variable(0, trainable=False) 
             self.loss = self.calculate_loss() 
@@ -215,9 +357,14 @@ class RNNBaseModel(object):
 
 
     def update_parameters(self, loss): 
-        optimizer = self.get_optimizer(0.001) 
+        """
+        Args: 
+            loss (float): 
+        """
+        # Chosen optimizer is received and gradiens are computed and clipped. 
+        optimizer = self.get_optimizer(self.learning_rate) 
         grads = optimizer.compute_gradients(loss) 
-        clipped = [(tf.clip_by_value(g, -self._grad_clip, self._grad_clip), v_)
+        clipped = [(tf.clip_by_value(g, -self.grad_clip, self.grad_clip), v_)
             for g, v_ in grads] 
         update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS) 
         with tf.control_dependencies(update_ops): 
