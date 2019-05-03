@@ -9,7 +9,7 @@ if __name__ == '__main__':
     model = LSTM(train_data_fp=data_train_fp,  
                  val_data_fp=data_val_fp,  
                  seq_lengths=[10, 30, 50], 
-                 num_pred=1, 
+                 forec_horiz=1, 
                  learning_rates=[0.01],  
                  batch_sizes=[64, 128, 256],   
                  optimizers=['adam'], 

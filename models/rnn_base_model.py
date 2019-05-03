@@ -4,6 +4,7 @@ sys.path.insert(0, '/home/andreas_teller/Projects/time_series_data_generator/lib
 
 from data_generator import DataGeneratorTimeSeries  
 from collections import deque
+import itertools 
 from datetime import datetime
 import time 
 import logging
@@ -13,15 +14,17 @@ import pprint as pp
 import numpy as np
 import tensorflow as tf
 
-class RNNBaseModel(object):
 
+class RNNBaseModel(object):
     """Interface containing boilerplate code for training tensorflow RNN  
     models. Subclassing models must implement self.calculate_loss(), which 
-    returns a tensor for the batch loss. Code for the training loop, 
+    returns a tensor for the batch loss. Code for the network training, 
     parameter updates, checkpointing, and inference are implemented here and
     subclasses are mainly responsible for building the computational graph 
     beginning with the placeholders and ending with the loss tensor.
     Args:
+        train_data_fp (:obj:'str'): Filepath to the training data.
+        val_data_fp (:obj:'str'): Filepath to the validation data.
         data_gen: Data generator class that yields batch dictionaries mapping 
             tf.placeholder names (as strings) to batch data (numpy arrays).
         batch_size: Minibatch size.
@@ -48,11 +51,10 @@ class RNNBaseModel(object):
         checkpoint_dir: Directory where checkpoints are saved.
         prediction_dir: Directory where predictions/outputs are saved.
     """
-
     def __init__(self,
                  train_data_fp, 
                  val_data_fp,
-                 num_pred=1, 
+                 forec_horiz=1, 
                  batch_sizes=[128], 
                  seq_lengths = [10],
                  num_epochs=9999, 
@@ -62,30 +64,37 @@ class RNNBaseModel(object):
                  grad_clips=[5],  
                  model_name='RNN_Model'):
         
-        # Placeholders for initial graph building. 
+        # Placeholders of hyperparamters for initial graph building. 
         self.batch_size = batch_sizes[0] 
         self.seq_length = seq_lengths[0]   
         self.learning_rate = learning_rates[0] 
         self.grad_clip = grad_clips[0] 
         self.optimizer = optimizers[0] 
-
+        
+        # Model name and  filepaths to training and validation data. 
+        self._model_name = model_name 
         self._train_data_fp = train_data_fp 
         self._val_data_fp = val_data_fp 
+        
+        # Hyperparamters. 
         self._seq_lengths = seq_lengths
-        self._num_pred = num_pred
+        self._forec_horiz = forec_horiz 
+        self._optimizers = optimizers
         self._batch_sizes = batch_sizes
+        self._learning_rates = learning_rates
         self._num_epochs = num_epochs
+        self._grad_clips = grad_clips 
+
+        # Validation metric saving and early stopping variables. 
         self._path = os.path.dirname(__file__) 
         self._save_metrics_fp = os.path.join(self._path, '../performance_reports/hpar_search_results.csv') 
-        self._optimizers = optimizers
         self.best_val_metric = None 
         self.stp_counter = 0
         self.stp_after = stp_after   
-        self._grad_clips = grad_clips 
+
+        # TensorFlow graph and session variables.  
         self._graph = self.build_graph() 
         self._session = tf.Session(graph=self._graph) 
-        self._model_name = model_name 
-        self._learning_rates = learning_rates
 
 
     def calculate_loss(self):
@@ -98,10 +107,13 @@ class RNNBaseModel(object):
         """
         raise NotImplementedError('subclass must implement this')
 
+    def network(self): 
+        raise NotImplementedError('subclass must implement this') 
+
 
     def get_optimizer(self, learning_rate):
         """ Returns the specified optimization algorithm. At this moment, 
-        Adam, RMSprop, and (classical) gradient descent can be chosen.    
+        Adam, RMSprop, and (classical) gradient descent can be sekected.    
 
         Args: 
             learning_rate (float): The learning rate of an optimizer 
@@ -125,9 +137,10 @@ class RNNBaseModel(object):
             assert False, 'optimizer must be adam, gd, or rms'
 
 
-    def calc_avg_loss(self, loss_hist):
+    def __calc_avg_loss(self, loss_hist):
         """ Computes the average of the loss history for the validation or 
-        training step per epoch by dividing .
+        training step per epoch by dividing the summ of all losses by the 
+        number of losses.
 
         Args:
             loss_hist (:obj:'list' of :obj:'float'): The loss history of the
@@ -172,12 +185,13 @@ class RNNBaseModel(object):
                 each batch in the epoch for the validation data. 
         """
         # compute average losses for training and validation data 
-        avg_batch_train_loss = self.calc_avg_loss(train_loss_hist) 
-        avg_batch_val_loss = self.calc_avg_loss(val_loss_hist) 
+        avg_batch_train_loss = self.__calc_avg_loss(train_loss_hist) 
+        avg_batch_val_loss = self.__calc_avg_loss(val_loss_hist) 
         
         # print metrics 
-        print('Epoch: {:4d}, Training Loss: {:12.8f}, Validation Loss: {:12.8f}, Time: {:5.3f} s'.format(ep+1, 
-            round(avg_batch_train_loss, 8), round(avg_batch_val_loss, 8), round(train_time, 3)))  
+        print('Epoch: {:4d}, Train Loss: {:12.8f}, Val Loss: {:12.8f}, Time: {:5.3f} s, Min. Val Loss: {:12.8f}'.format(ep+1, 
+            round(avg_batch_train_loss, 8), round(avg_batch_val_loss, 8),
+            round(train_time, 3), round(self.best_val_metric, 8)))  
 
     
     def early_stop(self, val_metric, minimize=True):  
@@ -232,14 +246,13 @@ class RNNBaseModel(object):
             ep = 0 
             
             # Initialze the training and validaton data generators which 
-            # will yield sequence batches for the model trainuing 
-            # validation. 
+            # yield sequence batches for the model trainuing validation. 
             train_data_gen = DataGeneratorTimeSeries(self.seq_length, 
-                                                     self._num_pred, 
+                                                     self._forec_horiz, 
                                                      self.batch_size, 
                                                      self._train_data_fp)  
             val_data_gen = DataGeneratorTimeSeries(self.seq_length, 
-                                                   self._num_pred, 
+                                                   self._forec_horiz, 
                                                    self.batch_size, 
                                                    self._val_data_fp) 
 
@@ -281,7 +294,7 @@ class RNNBaseModel(object):
                 # Early stopping stops the training when a specified number
                 # of epochs without any impreovment in the validation metric
                 # have passed.
-                if not (self.early_stop(self.calc_avg_loss(val_loss_hist))):
+                if not (self.early_stop(self.__calc_avg_loss(val_loss_hist))):
                     if mode == 'hyp': 
                         self.save_metrics(ep) 
                     return
@@ -292,7 +305,9 @@ class RNNBaseModel(object):
                 val_data_gen.reset_gen()
                 self.report_metrics(train_loss_hist, val_loss_hist, ep, train_time)
                 ep += 1
-
+        
+        # When the training is run in hyperparamter search mode only save 
+        # the validation metrics and do not save any models. 
         if mode == 'hyp': 
             self.save_metrics(ep)
 
@@ -300,33 +315,40 @@ class RNNBaseModel(object):
             # TODO: implement train mode 
             pass 
 
+
     def hyp_search(self): 
-        # TODO: find better solution for nested for-loops 
-        for bs in self._batch_sizes: 
-            for lr in self._learning_rates: 
-                for sl in self._seq_lengths: 
-                    for gs in self._grad_clips: 
-                        for opt in self._optimizers: 
-                            self.batch_size = bs 
-                            self.learning_rate = lr 
-                            self.seq_length = sl 
-                            self.grad_clip = gs 
-                            self.optimizer = opt 
+        """ Iteratively produces the Cartesian product of all hyperparameters
+        and invokes the training process for each element of it.
+        """
+        for i in itertools.product(self._batch_sizes, self._learning_rates,
+                                   self._seq_lengths, self._grad_clips,
+                                   self._optimizers): 
+            self.batch_size = i[0] 
+            self.learning_rate = i[1] 
+            self.seq_length = i[2] 
+            self.grad_clip = i[3] 
+            self.optimizer = i[4] 
 
-                            # Updates the tensorflow computational graph with
-                            # the new hyperparameters. 
-                            self._graph = self.build_graph() 
-                            self._session = tf.Session(graph=self._graph) 
+            # Updates the tensorflow computational graph with
+            # the new hyperparameters. 
+            self._graph = self.build_graph() 
+            self._session = tf.Session(graph=self._graph) 
 
-                            # Run network training for the specified 
-                            # hyperparameter combinations in hyp mode
-                            # which means that models are not saved. 
-                            self.train(mode='hyp') 
+            # Run network training for the specified 
+            # hyperparameter combinations in hyp mode
+            # which means that models are not saved. 
+            self.train(mode='hyp') 
+
+            # Reset the saved best validation metric before new
+            # hyperparameter combination is tested.  
+            self.best_val_metric = None  
+
 
     def prediction(self): 
         # TODO: implement prediction step 
         pass
 
+    # TODO: implement learning rate reductions 
 
     def save_model(self, saver, validation_metric, session, name):
         """
