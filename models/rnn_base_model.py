@@ -22,11 +22,11 @@ class RNNBaseModel(object):
     parameter updates, checkpointing, and inference are implemented here and
     subclasses are mainly responsible for building the computational graph 
     beginning with the placeholders and ending with the loss tensor.
+    
     Args:
         train_data_fp (:obj:'str'): Filepath to the training data.
         val_data_fp (:obj:'str'): Filepath to the validation data.
-        data_gen: Data generator class that yields batch dictionaries mapping 
-            tf.placeholder names (as strings) to batch data (numpy arrays).
+        forec_horiz (int): Forecast horizon.  
         batch_size: Minibatch size.
         learning_rate: Learning rate.
         optimizer: 'rms' for RMSProp, 'adam' for Adam, 'sgd' for SGD
@@ -62,7 +62,8 @@ class RNNBaseModel(object):
                  optimizers=['adam'], 
                  stp_after=100, 
                  grad_clips=[5],  
-                 model_name='RNN_Model'):
+                 model_name='RNN_Model', 
+                 hyper_metrics_fp=''):
         
         # Placeholders of hyperparamters for initial graph building. 
         self.batch_size = batch_sizes[0] 
@@ -73,6 +74,7 @@ class RNNBaseModel(object):
         
         # Model name and  filepaths to training and validation data. 
         self._model_name = model_name 
+        self._hyper_metrics_fp = hyper_metrics_fp 
         self._train_data_fp = train_data_fp 
         self._val_data_fp = val_data_fp 
         
@@ -87,10 +89,11 @@ class RNNBaseModel(object):
 
         # Validation metric saving and early stopping variables. 
         self._path = os.path.dirname(__file__) 
-        self._save_metrics_fp = os.path.join(self._path, '../performance_reports/hpar_search_results.csv') 
+        self._save_metrics_fp = self._hyper_metrics_fp 
         self.best_val_metric = None 
         self.stp_counter = 0
         self.stp_after = stp_after   
+        self._saver = tf.train.Saver()  
 
         # TensorFlow graph and session variables.  
         self._graph = self.build_graph() 
@@ -99,15 +102,20 @@ class RNNBaseModel(object):
 
     def calculate_loss(self):
         """ The calculation of the loss function has to be implemented by all 
-        subclasses. Necessarily, this also includes the specification of the
-        specfic model typoology. 
+        subclasses.
 
         Raises: 
             NotImplementedError: If method is not implemented by subclass. 
         """
         raise NotImplementedError('subclass must implement this')
 
-    def network(self): 
+    def network(self):
+        """ The network topology has to be implemented by all subclasses. 
+
+        Raise: 
+            NotImplementedError: If network typology is not implemented in 
+                subclass. 
+        """
         raise NotImplementedError('subclass must implement this') 
 
 
@@ -138,8 +146,8 @@ class RNNBaseModel(object):
 
 
     def __calc_avg_loss(self, loss_hist):
-        """ Computes the average of the loss history for the validation or 
-        training step per epoch by dividing the summ of all losses by the 
+        """ Computes the average of the loss history for the training or 
+        validation step per epoch by dividing the sum of all losses by the 
         number of losses.
 
         Args:
@@ -148,7 +156,7 @@ class RNNBaseModel(object):
                 represents the loss of one batch.
         
         Returns:
-            float: Average batch loss of the epoch.
+            float: Average batch loss of epoch.
         """
         return sum(loss_hist) / len(loss_hist)
 
@@ -179,24 +187,29 @@ class RNNBaseModel(object):
         epoch or a specified number of epochs. 
 
         Args: 
-            train_loss_hist (:obj:'list' of :obj:'float'): Contains the aggregated loss of
-                each batch in the epoch for the training data.  
-            val_loss_hist (:obj:'list' of :obj:'float'): Contains the aggregated loss of
-                each batch in the epoch for the validation data. 
+            train_loss_hist (:obj:'list' of :obj:'float'): Contains the 
+                aggregated loss of each batch in the epoch for the training 
+                data.  
+            val_loss_hist (:obj:'list' of :obj:'float'): Contains the 
+                aggregated loss of each batch in the epoch for the 
+                validation data. 
         """
         # compute average losses for training and validation data 
         avg_batch_train_loss = self.__calc_avg_loss(train_loss_hist) 
         avg_batch_val_loss = self.__calc_avg_loss(val_loss_hist) 
         
         # print metrics 
-        print('Epoch: {:4d}, Train Loss: {:12.8f}, Val Loss: {:12.8f}, Time: {:5.3f} s, Min. Val Loss: {:12.8f}'.format(ep+1, 
-            round(avg_batch_train_loss, 8), round(avg_batch_val_loss, 8),
-            round(train_time, 3), round(self.best_val_metric, 8)))  
+        print(('Epoch: {:4d}, Train Loss: {:12.8f}, Val Loss: {:12.8f}, Time: '
+               '{:5.3f} s, Min. Val Loss: {:12.8f}').format(ep+1, 
+                    round(avg_batch_train_loss, 8), 
+                    round(avg_batch_val_loss, 8),
+                    round(train_time, 3), 
+                    round(self.best_val_metric, 8)))  
 
     
     def early_stop(self, val_metric, minimize=True):  
         """ Early stopping aborts the network training process when no 
-        validation loss/accuracy improvements were observed for a speciefied 
+        validation loss/accuracy improvements were observed for a specified 
         amount of epochs defined in the variable stp_after. 
 
         Args: 
@@ -235,10 +248,12 @@ class RNNBaseModel(object):
         Args: 
             mode (:obj:'str', optional): 
         """
-        print('------------------------------------------------------------------------------') 
-        print('Initialized Model - Name: {}, Seq. Length: {}, Batch Size: {}, Learning Rate: {}, Optimizer: {}, Grad. Clip.: {}'.format(
-            self._model_name, self.seq_length, self.batch_size,
-            self.learning_rate, self.optimizer, self.grad_clip))   
+        print(80*'-') 
+        print(('Initialized Model - Name: {}, Seq. Length: {}, ' 
+               'Batch Size: {}, Learning Rate: {}, Optimizer: {}, ' 
+               'Grad. Clip.: {}').format(self._model_name, self.seq_length, 
+                                         self.batch_size, self.learning_rate, 
+                                         self.optimizer, self.grad_clip))   
         
         with self._session.as_default(): 
             
@@ -246,7 +261,7 @@ class RNNBaseModel(object):
             ep = 0 
             
             # Initialze the training and validaton data generators which 
-            # yield sequence batches for the model trainuing validation. 
+            # yield sequence batches for the model training and validation. 
             train_data_gen = DataGeneratorTimeSeries(self.seq_length, 
                                                      self._forec_horiz, 
                                                      self.batch_size, 
@@ -292,11 +307,17 @@ class RNNBaseModel(object):
                     val_loss_hist.append(loss[0])
                 
                 # Early stopping stops the training when a specified number
-                # of epochs without any impreovment in the validation metric
-                # have passed.
-                if not (self.early_stop(self.__calc_avg_loss(val_loss_hist))):
+                # of epochs without any improvement in the validation metric
+                # has passed.
+
+                val_metric = self.__calc_avg_loss(val_loss_hist)  
+                if not (self.early_stop(val_metric)):
                     if mode == 'hyp': 
                         self.save_metrics(ep) 
+                    if mode == 'train': 
+                        self.save_model(self._saver, val_metric,
+                                        self._session, self._model_name)   
+                    
                     return
 
                 # Reset the training  validation data generator for the next 
@@ -307,14 +328,14 @@ class RNNBaseModel(object):
                 ep += 1
         
         # When the training is run in hyperparamter search mode only save 
-        # the validation metrics and do not save any models. 
+        # the validation metrics and do not save models. 
         if mode == 'hyp': 
             self.save_metrics(ep)
 
         if mode == 'train': 
-            # TODO: implement train mode 
-            pass 
-
+        self.save_model(self._saver, val_metric, self._session,
+                        self._model_name)   
+              
 
     def hyp_search(self): 
         """ Iteratively produces the Cartesian product of all hyperparameters
@@ -343,6 +364,8 @@ class RNNBaseModel(object):
             # hyperparameter combination is tested.  
             self.best_val_metric = None  
 
+    def fit(self): 
+        self.train(mode='train') 
 
     def prediction(self): 
         # TODO: implement prediction step 
@@ -358,11 +381,11 @@ class RNNBaseModel(object):
             sesseon (): 
             name (): 
         """
-        if self.best_validation_metric == None: 
+        if self.best_val_metric == None: 
             if not os.path.isdir('saved_models_' + name):
                 os.mkdir('saved_models_' + name)             
         else:  
-            if validation_metric < self.best_validation_metric:         
+            if validation_metric < self.best_val_metric:         
                 save_path = saver.save(session, "./saved_models_" + name + "/model.ckpt")
                 print("Model saved")
 
@@ -387,10 +410,11 @@ class RNNBaseModel(object):
         optimizer = self.get_optimizer(self.learning_rate) 
         grads = optimizer.compute_gradients(loss) 
         clipped = [(tf.clip_by_value(g, -self.grad_clip, self.grad_clip), v_)
-            for g, v_ in grads] 
+                   for g, v_ in grads] 
         update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS) 
+        
         with tf.control_dependencies(update_ops): 
-            step = optimizer.apply_gradients(clipped,
-                global_step=self.global_step) 
+            step = optimizer.apply_gradients(clipped, 
+                                             global_step=self.global_step) 
 
         self.step = step 
