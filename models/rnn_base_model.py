@@ -1,47 +1,46 @@
 # workaround to load data generator module 
+# ------------------------------
 import sys 
 sys.path.insert(0, '/home/andreas_teller/Projects/time_series_data_generator/lib')
-
-from data_generator import DataGeneratorTimeSeries  
+# ------------------------------
 from collections import deque
-import itertools 
+from data_generator import DataGeneratorTimeSeries  
 from datetime import datetime
-import time 
-import logging
-import os
-import csv
-import pprint as pp
-import numpy as np
-import tensorflow as tf
 
+import csv
+import itertools 
+import logging
+import numpy as np
+import os
+import pprint as pp
+import tensorflow as tf
+import time 
 
 class RNNBaseModel(object):
-    """Interface containing boilerplate code for training tensorflow RNN  
+    """ Interface containing boilerplate code for training tensorflow RNN  
     models. Subclassing models must implement self.calculate_loss(), which 
-    returns a tensor for the batch loss. Code for the network training, 
-    parameter updates, checkpointing, and inference are implemented here and
-    subclasses are mainly responsible for building the computational graph 
-    beginning with the placeholders and ending with the loss tensor.
+    returns a  batch loss tensor and self.network() to specifiy the desired
+    network structure. 
+    Code for the network training, parameter updates, checkpointing, and 
+    inference are implemented here and subclasses are mainly responsible 
+    for building the computational graph beginning with the placeholders 
+    and ending with the loss tensor.
     
     Args:
-        train_data_fp (:obj:'str'): Filepath to the training data.
-        val_data_fp (:obj:'str'): Filepath to the validation data.
-        forec_horiz (int): Forecast horizon.  
-        batch_size: Minibatch size.
-        learning_rate: Learning rate.
-        optimizer: 'rms' for RMSProp, 'adam' for Adam, 'sgd' for SGD
-        grad_clip: Clip gradients elementwise to have norm at most equal to grad_clip.
-        regularization_constant:  Regularization constant applied to all trainable parameters.
-        keep_prob: 1 - p, where p is the dropout probability
-        early_stopping_steps:  Number of steps to continue training after validation loss has
-            stopped decreasing.
-        warm_start_init_step:  If nonzero, model will resume training a restored model beginning
-            at warm_start_init_step.
-        num_restarts:  After validation loss plateaus, the best checkpoint will be restored and the
-            learning rate will be halved.  This process will repeat num_restarts times.
-        enable_parameter_averaging:  If true, model saves exponential weighted averages of parameters
-            to separate checkpoint file.
-        min_steps_to_checkpoint:  Model only saves after min_steps_to_checkpoint training steps
+        train_data_fp (:obj:'str'): Filepath to training data.
+        val_data_fp (:obj:'str'): Filepath to validation data.
+        hrzn (int): Forecasting horizon which determines the number of time steps 
+            that are to be predicted by the model. 
+        batch_sizes (:obj:'list' of :obj:'int'): List of mini batch sizes.
+        learning_rates (:obj:'list' of :obj:'float'): List of learning rates.
+        optimizers (:obj:'list' of :obj:'str'): List of optimization
+            algorithms. 'rms' for RMSProp, 'adam' for Adam, 'sgd' for SGD. 
+        grad_clips (:obj:'list' of :obj:'int'): List of gradient clip values. 
+            Gradients are clipped elementwise to receive norm at most equal to
+            clip values.
+        early_stopping_steps: Number of steps after which training is stopped
+            when no performance increasement was detected.
+        min_steps_to_checkpoint: Model only saves after min_steps_to_checkpoint training steps
             have passed.
         log_interval:  Train and validation accuracies are logged every log_interval training steps.
         loss_averaging_window:  Train/validation losses are averaged over the last loss_averaging_window
@@ -54,7 +53,7 @@ class RNNBaseModel(object):
     def __init__(self,
                  train_data_fp, 
                  val_data_fp,
-                 forec_horiz=1, 
+                 hrzn=1, 
                  batch_sizes=[128], 
                  seq_lengths = [10],
                  num_epochs=9999, 
@@ -63,7 +62,9 @@ class RNNBaseModel(object):
                  stp_after=100, 
                  grad_clips=[5],  
                  model_name='RNN_Model', 
-                 hyper_metrics_fp=''):
+                 project_dir=None, 
+                 hyper_metrics_fp=project_dir +
+                    '/performance_reports/hyper_search.csv':
         
         # Placeholders of hyperparamters for initial graph building. 
         self.batch_size = batch_sizes[0] 
@@ -72,7 +73,9 @@ class RNNBaseModel(object):
         self.grad_clip = grad_clips[0] 
         self.optimizer = optimizers[0] 
         
-        # Model name and  filepaths to training and validation data. 
+        # Model name and  filepaths to training data, validation data
+        # and where to save the hyperparameter search performance 
+        # metrics. 
         self._model_name = model_name 
         self._hyper_metrics_fp = hyper_metrics_fp 
         self._train_data_fp = train_data_fp 
@@ -80,7 +83,7 @@ class RNNBaseModel(object):
         
         # Hyperparamters. 
         self._seq_lengths = seq_lengths
-        self._forec_horiz = forec_horiz 
+        self._forec_horiz = hrzn  
         self._optimizers = optimizers
         self._batch_sizes = batch_sizes
         self._learning_rates = learning_rates
@@ -121,14 +124,15 @@ class RNNBaseModel(object):
 
     def get_optimizer(self, learning_rate):
         """ Returns the specified optimization algorithm. At this moment, 
-        Adam, RMSprop, and (classical) gradient descent can be sekected.    
+        Adam, RMSprop, and (classical) gradient descent can be selected.    
 
         Args: 
             learning_rate (float): The learning rate of an optimizer 
                 specifies the magnitude of the movement towards the (local) 
                 minimum of the loss function. 
 
-        Returns: The selected TensorFlow optimizer
+        Returns: 
+            (:obj:'tf.optimizer'): TensorFlow optimizer
         """
         if self.optimizer == 'adam':
             return tf.train.AdamOptimizer(learning_rate,
@@ -338,11 +342,13 @@ class RNNBaseModel(object):
               
 
     def hyp_search(self): 
-        """ Iteratively produces the Cartesian product of all hyperparameters
-        and invokes the training process for each element of it.
+        """ Iteratively computes the Cartesian product of all hyperparameters
+        and invokes the training process for each element.
         """
-        for i in itertools.product(self._batch_sizes, self._learning_rates,
-                                   self._seq_lengths, self._grad_clips,
+        for i in itertools.product(self._batch_sizes, 
+                                   self._learning_rates,
+                                   self._seq_lengths, 
+                                   self._grad_clips,
                                    self._optimizers): 
             self.batch_size = i[0] 
             self.learning_rate = i[1] 
